@@ -1,0 +1,646 @@
+---
+title: "Movie Review Sentiment Analysis BUAN 6357 Project"
+author: "Lakshay Malhotra"
+Date: "20 April 2020"
+output:
+   html_document:
+      code_folding: hide
+      df_print: paged
+      keep_md: true
+      fig_width: 7
+      fig_height: 6
+      fig_caption: true
+      theme: cerulean
+      highlight: espresso
+      toc: true
+      toc_float: TRUE
+      pandoc: ["--number-sections","--number-offset=0" ]
+---
+
+```{r setup, warning = FALSE}
+chooseCRANmirror(graphics=FALSE, ind=1)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Overview
+The dataset is sourced from Kaggle and the main focus of this project is to learn various NLP techniques. The user would be able to accurately predict how the movie is trending among the public by reviewing and classifying each review. This will help users to make strategic decisions in their personal or business life.
+
+* **Q1. Why build the NLP model to classify movie reviews and how it can be useful in business or personnel life ?**
+  +  We know that it has become very common for people to look at review either at social websites or on movie critique websites like IMDB reviews before watching they go to see a movie. Some website provides movie ranking, rating, and reviews for coming movies as well as the old movies. Rotten tomato is one of the famous ones and it grabs all the reviews from other movie critic's websites. 
+  +  Also, In today's world, the media-services provider has replaced cable streaming and has become a significant movie and TV shows provider. There are many media-services providers which in today's competing market are coming with new ideas and innovations to retain maximum customers. So, it has become important not just to keep a good collection of movies and TV shows but to have a good content recommendation algorithm that can provide a good recommendation to its user. The user profile history may tell the algorithm the user's movie/TV shows genre but at the same time, it is important to recommend good choices from the vast pool of users' favorite genre. 
+
+So, The above two points suggest that by classifying movie reviews, we can provide a machine learning model extra information required to recommend the movie to the users.
+
+* **Real-Time Examples of Movie recommendation system**
+  + Everyone knows about **Netflix** - an American media-services provider and production. It is one of the most populous media service providers in the world. It is a known fact that Netflix has one of the best media recommendation systems. It monitors all the information like genre, length of watch duration, viewing history,etc..     This algorithm uses Topic modeling techniques and the information monitored on users to provide the best media recommendation to the Users.
+
+* **How we can boost Netflix recommendation system**
+  + One of the fact about Netflix's recommendation system accuracy is around 82%. The accuracy can be improved by the following ways:
+    - We can use the below NLP modeling technique to classify reviews and recommend trending movies to the User.
+    - Moreover, we can classify true and fake reviews and classify only real reviews to the movie review classification model for better prediction.
+```{r libraries, warning = FALSE}
+pacman::p_load(e1071, ggplot2, caret, corrplot,dplyr,tm,wordcloud,RColorBrewer,tm.plugin.webmining,SnowballC,ngram,stringr,lsa,koRpus,textdata,
+               gutenbergr,tidytext,textstem,ggplot2,widyr,igraph,ggraph,forcats,tidyr,janitor,lubridate,reshape2,
+               tidyverse,foreign,nnet,neuralnet,arm,ROCR,pROC,party,rpart,doParallel,xgboost,imager,magrittr,rattle,
+               plotly,adabag)
+theme_set(theme_classic())
+options(digits = 3)
+```
+
+```{r ImportData, warning = FALSE}
+train <- read.csv("train.tsv",sep="\t")
+test <- read.csv("test.tsv",sep="\t")
+```
+# Facts about dataset and data{.tabset .tabset-fade .tabset-pills}
+In the dataset, each scentence is divided into various phrases of varying length. Some phrase contains only one word.
+```{r headers, warning = FALSE}
+head(train)
+train[train$SentenceId==2,]
+```
+## Glimpse of Training Data
+From below statistics, we can infer that:
+
+  * Sentences have been split in 18 phrases at average for train dataset and 20 phrases for test dataset.
+  * There are total of 156060 phrases in the train dataset and on average each phrase contains around seven words.
+  * There are total of 66292 phrases in the train dataset and on average each phrase contains around seven words.
+  * The dataset is big enough to provide insightful results with train dataset having 8529 sentences and test dataset having 3310 sentences.
+```{r avgcount, warning = FALSE}
+print(paste("Average count of phrases per sentence in the train dataset is:", mean(aggregate(train$PhraseId,by=list(train$SentenceId), FUN=length)$x) %>% round()))
+print(paste("Average count of phrases per sentence in the test dataset is:", mean(aggregate(test$PhraseId,by=list(test$SentenceId), FUN=length)$x) %>% round()))
+
+print(paste("Number of phrases in the train dataset:", sum(aggregate(train$PhraseId,by=list(train$SentenceId), FUN=length)$x) %>% round()))
+print(paste("Number of phrases in the test dataset:", sum(aggregate(test$PhraseId,by=list(test$SentenceId), FUN=length)$x) %>% round()))
+
+print(paste("Number of sentences in the train dataset:", unique(train$SentenceId) %>% length()))
+print(paste("Number of sentences in the test dataset:", unique(test$SentenceId) %>% length()))
+
+print(paste('Average word length of phrases in the train dataset is:', mean(lengths(gregexpr("[A-z]\\W", train$Phrase))+1L) %>% round()))
+print(paste('Average word length of phrases in the test dataset is:', mean(lengths(gregexpr("[A-z]\\W", test$Phrase))+1L) %>% round()))
+```
+## Target Variable: Sentiment
+The description of Target Variable:
+
+  * 0 - Very Bad rating
+  * 1 - Bad Rating
+  * 2 - Average Rating
+  * 3 - Good Rating
+  * 4 - Very Good Rating
+  
+Below we can see the distribution of sentiment (target variable) within the training dataset. It shows that most of the phrases received 2 sentiment value (average) and the very few received 1 and 4 rating with 0 being the lowest in frequency.
+```{r sentimentcount, warning = FALSE}
+sentimentValue <- aggregate(train$PhraseId,by=list(train$Sentiment), FUN=length)$Group.1
+sentimentcount <- aggregate(train$PhraseId,by=list(train$Sentiment), FUN=length)$x
+barplot(sentimentcount, las = 2, 
+        names.arg = sentimentValue,
+        col ="330068", main ="Count of Movie Ratings in Training Data Set",
+        ylab = "Word frequencies")
+```
+
+#  Data Preprocessing to create Word Cloud
+
+## Converting Data into Corpus
+We are making Corpus (dictionary of words) from all the phrases, then removing unnecessary text like stopwords, numbers,pronunciation, whitespaces which does not provides any meaning. Also, we have performed lemmenting to derive meaningful root of the words.
+```{r Corpus, warning = FALSE}
+train.corpus <- VCorpus(VectorSource(train$Phrase))
+train.corpus = tm_map(train.corpus, content_transformer(tolower))
+train.corpus = tm_map(train.corpus, removeNumbers)
+train.corpus = tm_map(train.corpus, removePunctuation)
+train.corpus = tm_map(train.corpus, removeWords, stopwords())
+train.corpus = tm_map(train.corpus, stripWhitespace)
+train.corpusw = tm_map(train.corpus, lemmatize_strings)
+train.corpusw = tm_map(train.corpusw, PlainTextDocument)
+```
+
+## Bag of Words
+Now, We have the clean text from phrases which needs to be converted into number vectors using word count per sentence 
+```{r BagsofWordsModel, warning = FALSE}
+dtm = DocumentTermMatrix(train.corpusw)
+dtm = removeSparseTerms(dtm, 0.999)
+dataset = as.data.frame(as.matrix(dtm))
+```
+
+## Word Cloud preprocessing
+Creating Dataframe for WordCloud 
+```{r WordCloudpreprocessing, warning = FALSE}
+v = sort(colSums(dataset),decreasing=TRUE)
+myNames = names(v)
+d = data.frame(word=myNames,freq=v)
+```
+
+# Exploratory Data Analysis
+
+## Word Cloud
+The Word Cloud shows that film, movie, like, one, character, make, story, good, time, not, one, see, comedy, plot, work, funny have been used most in the movie reviews. Here the word 'not' suggest that we have to perform bigram in order to perform any analysis
+```{r WordCloudplot, warning = FALSE}
+pal2 <- brewer.pal(8,"Dark2")
+suppressWarnings(wordcloud(d$word, colors=pal2,random.order=FALSE, d$freq, min.freq=80,scale=c(8,.2),max.words=47,rot.per=.15)
+)
+```
+
+## Most Frequent Words
+Let's look at most frequent to understand which words are used by people to provide movie reviews are influential in the sentiment analysis.
+
+```{r MostFreq, warning = FALSE}
+barplot(d[1:10,]$freq, las = 2, 
+        names.arg = d[1:10,]$word,
+        col ="330066", main ="Most frequent words",
+        ylab = "Word frequencies")
+```
+
+## Least Frequent Words
+Let's look at least words to understand which words are used by people to provide movie reviews and which might not be influential in the sentiment analysis. To be sure, we need to perform TF-IDF which will provide weights to each word which might make less occurring words important for analysis 
+```{r LeastFreq, warning = FALSE}
+barplot(d[nrow(d):(nrow(d)-10),]$freq, las = 2, 
+        names.arg = d[nrow(d):(nrow(d)-10),]$word,
+        col ="green", main ="Least frequent words",
+        ylab = "Word frequencies")
+```
+
+## Preparing Data for further exploratory analysis
+Removing NA's and converting target variable to factors
+```{r Data Cleaning - Corpus, warning = FALSE}
+dataset$Sentiment = train$Sentiment
+dataset$Sentiment = factor(dataset$Sentiment, levels = c(0,1,2,3,4))
+df <-  data.frame(text=unlist(sapply(train.corpus, `[`, "content")), stringsAsFactors=FALSE)
+df$Sentiment = train$Sentiment
+##df$Sentiment = factor(df$Sentiment, levels = c(0,1,2,3,4))
+ val=0
+  for (i in 1:nrow(df))
+  {
+    if (df$text[i]== "")
+    { 
+      val=c(val,gsub("",NA,df$text[i]))
+    }else{
+      val=c(val,lemmatize_strings(df$text[i]))
+    }
+  }
+val <- val[2:length(val)]
+df$text <- val
+df <- df[!duplicated(df), ]
+df <- na.omit(df)
+df <- df[!apply(is.na(df) | df$text == "", 1, all),]
+```
+Tokenizing the Words
+```{r Data Tokenize - Corpus, warning = FALSE}
+tidy_book <- df %>%
+  mutate(line = row_number()) %>%
+  unnest_tokens(word, text)
+```
+
+## Frequency of Words
+```{r count, warning = FALSE}
+tidy_book %>%
+  count(word, sort = TRUE)
+```
+Below graph suugets that word s has come lot of time. S is not a word and needs to be eliminated from dataframe
+```{r countplot, warning = FALSE}
+tidy_book %>%
+  count(word, sort = TRUE) %>% 
+  top_n(20) %>% 
+  ggplot(aes(fct_reorder(word, n), n)) + 
+  geom_col(fill="gold", width = 0.6) +
+  coord_flip() +
+  labs(y="Frequency", x = NULL)
+```
+
+##Sentiment lexicons
+After exploring sentiment lexicons using bing, we deduce that we have 47044 positive and 47753 negative words
+```{r bing, warning = FALSE}
+tidy_book %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(sentiment, sort = TRUE)
+```
+Below are some most postive and negative words within the training dataset that are contributing the most to the sentiment scores.
+```{r Sentiment Plot suing bing, warning = FALSE}
+tidy_book %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(sentiment, word, sort = TRUE) %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup %>%
+  ggplot(aes(fct_reorder(word, n), 
+             n, 
+             fill = sentiment)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ sentiment, scales = "free") +
+  labs(y= "Contribution to Sentiment", x = NULL)
+```
+
+## N- Grams
+Implementing Bigram
+```{r ngram model, warning = FALSE}
+tidy_ngram <- df %>%
+  unnest_tokens(bigram, text, token = "ngrams", n=2)
+
+tidy_ngram
+```
+Below are some most common bigrams
+```{r biram count, warning = FALSE}
+tidy_ngram %>%
+  count(bigram, sort = TRUE)
+```
+
+```{r bigram, warning = FALSE}
+bigram_counts <- tidy_ngram %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word) %>%
+  count(word1, word2, sort = TRUE)
+
+bigram_counts
+```
+
+# Network Analysis
+Creating a word network from bigrams
+```{r bigram table, warning = FALSE}
+bigram_graph <- bigram_counts %>%
+  filter(n > 40) %>%
+  graph_from_data_frame()
+
+bigram_graph
+```
+After visualizing Bigram Network, we found that closely occurring two words. Below words are occurring more than 40 times within all the phrases within the dataset. Below Network suggests that bigram will be best suited for sentiment analysis. 
+
+```{r network plot, warning = FALSE}
+bigram_graph %>%
+  ggraph(layout = "nicely") +
+  geom_node_point(size = 6, color = "khaki") +
+  geom_edge_link(aes(edge_alpha = n),
+                 show.legend = FALSE, 
+                 arrow = arrow(length = unit(1.5, 'mm')), 
+                 start_cap = circle(3, 'mm'),
+                 end_cap = circle(3, 'mm')) + 
+  geom_node_text(aes(label = name),
+                 color = "navy") +
+  theme_graph() 
+```
+
+# Data Preparation
+We have performed latent semantic analysis(LSA) transformation to convert our words into 50 transformed variables
+```{r model Corupus, warning = FALSE}
+df1 <- df[1:1000,]
+tidy_ngram1 <- df1 %>%
+  unnest_tokens(bigram, text, token = "ngrams", n=2)
+train.corpus_ngram <- VCorpus(VectorSource(tidy_ngram1$bigram))
+dtm_ngram = DocumentTermMatrix(train.corpus_ngram)
+tfidf <- weightTfIdf(dtm_ngram) 
+txt_mat<- as.textmatrix(as.matrix(tfidf))
+lsa_model <- lsa(txt_mat,dim=50)
+words.df <- as.data.frame(as.matrix(lsa_model$tk)) 
+
+tidy_ngram1$Sentiment = as.factor(tidy_ngram1$Sentiment)
+trainData <-  cbind(label = tidy_ngram1$Sentiment, words.df)
+```
+
+# 8 Run Models{.tabset .tabset-fade .tabset-pills}
+* Data Preprocessing
+  + Data is already divided into train and test datastet
+  
+* Cross Validation
+  + We will use k-fold(k=5) cross validation to avoid overfitting of our model
+  + We will precompute these k-folds even before our model and feed the same k-folds for training and cross validation so that we can compare our model for all k-folds and reproducibility
+  
+* We will run 8 ML algorithms to train our model
+  + Linear SVM
+  + Radial SVm
+  + Decision Tree
+  + Adaboost Decision Tree
+  + GGboost Decision Tree
+  + Decison Tree with Bagging
+  + random Forest
+  + Neural Network (using caret)
+ 
+## Linear SVM 
+The accuacy for Ljnear SVM is 50.3%.
+```{r Linear SVM Model,warning = FALSE}
+set.seed(13)
+pet_CV_Folds <- createMultiFolds(trainData$label, k = 5, times=1)
+
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+grid <- expand.grid(C=seq(0.8,1.2,0.2))
+set.seed(13)
+Linear_SVM <- caret::train(label ~., data = trainData,method="svmLinear",
+                 trControl=trnControl,tuneGrid = grid)
+
+Linear_SVM_pred <- predict(Linear_SVM, trainData)
+confusionMatrix(table(Linear_SVM_pred,trainData$label))
+```
+
+## Radial SVM 
+The accuacy for Radial SVM is 49.5%.
+```{r Radial SVM Model, warning=FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+grid <- expand.grid(C=1,sigma = 0.01)
+set.seed(13)
+Radial_SVM <- caret::train(label ~., data = trainData,method="svmRadial",
+                 trControl=trnControl,tuneGrid = grid)
+
+Radial_SVM_pred <- predict(Radial_SVM, trainData)
+confusionMatrix(table(Radial_SVM_pred,trainData$label))
+```
+
+## Decision Tree 
+The accuacy for Decision Tree is 49.4%.
+```{r Decision Tree Model, warning = FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+tune.gridcart <- expand.grid(maxdepth = seq(1,10,1))
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+tree <- caret::train(label ~., data = trainData, method = "rpart",
+                   parms = list(split = "information"),
+                   trControl=trnControl)
+tree_pred <- predict(tree, trainData)
+confusionMatrix(table(tree_pred,trainData$label))
+```
+
+### Decision Tree Plot
+Since, we have LSA transformed variables, we can't deduce which words are more important to establish decision tree. 
+```{r Decision Tree Plot, warning = FALSE}
+fancyRpartPlot(tree$finalModel, uniform=TRUE,
+               main="Pruned Classification Tree")
+```
+
+### Variable Importance accoring to Decision Tree
+
+* Let consider only the variables that our more than 50% importance for our analysis
+  + V32 is the most important LSA variable
+  + V23 is the second most important LSA variable
+```{r Decision Varaible Plot, warning = FALSE}
+plot(varImp(tree),top = 10,main='Variable Importance for Decision Tree')
+```
+
+## XGboost Decision Tree 
+The accuracy for XGboost Decision Tree is 58.4%. After XGboost boosting algorithm, decision tree accuracy has improved little but still is not good at classifying reviews.
+```{r XGboost Model, warning = FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+tune.gridcart <- expand.grid(maxdepth = seq(1,10,1))
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+XGboost_DT <- caret::train(label ~., data = trainData, method = "xgbTree",
+                   parms = list(split = "information"),
+                   trControl=trnControl)
+XGboost_DT_pred <- predict(XGboost_DT, trainData)
+confusionMatrix(table(XGboost_DT_pred,trainData$label))
+```
+
+## Random Forest 
+The accuracy for Random Forest is 76.5%. Random Forest's accuracy has improved a lot at classifying reviews.
+```{r Random Forest Model, warning = FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+tune.gridcart <- expand.grid(maxdepth = seq(1,10,1))
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+rf_tree <- caret::train(label ~., data = trainData, method = "rf",
+                   parms = list(split = "information"),
+                   trControl=trnControl)
+rf_tree_pred <- predict(rf_tree, trainData)
+confusionMatrix(table(rf_tree_pred,trainData$label))
+```
+
+## Adaboost Decision Tree 
+The accuracy for XGboost Decision Tree is 49.6%. After Adaboost boosting algorithm, decision tree accuracy is almost same.
+```{r Adaboost Model, warning = FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+tune.gridcart <- expand.grid(maxdepth = seq(1,10,1))
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+Adaboost_DT <- caret::train(label ~., data = trainData, method = "AdaBag",
+                   parms = list(split = "information"),
+                   trControl=trnControl)
+Adaboost_DT_pred <- predict(Adaboost_DT, trainData)
+confusionMatrix(table(Adaboost_DT_pred,trainData$label))
+```
+
+## BoostStrap Decision Tree
+The accuracy for BoostStrap Decision Tree Model is 75.8%. After boostStraping, decision Tree's accuracy has improved a lot at classifying reviews.
+```{r BoostStrap Decision Tree Model, warning = FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+tune.gridcart <- expand.grid(maxdepth = seq(1,10,1))
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+dtree_reg <- caret::train(label ~., data = trainData, method = "treebag",
+                   parms = list(split = "information"),trControl=trnControl)
+dtree_reg_pred <- predict(dtree_reg, trainData)
+confusionMatrix(table(dtree_reg_pred,trainData$label))
+```
+## Neural Net 
+The accuacy for Neural Net is 50.6%.
+```{r Nnet Model, warning = FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+tune.gridcart <- expand.grid(maxdepth = seq(1,10,1))
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, 
+                           allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+Nnet_reg <- caret::train(label ~., data = trainData, method = "nnet",trControl=trnControl)
+Nnet_reg_pred <- predict(Nnet_reg, trainData)
+confusionMatrix(table(Nnet_reg_pred,trainData$label))
+```
+
+# Comparing Various Models
+
+## ROC Curve
+The area under curve for Random Forest is highest and outperforms all other algorithms
+
+```{r AUC Plots, warning = FALSE}
+dtree_roc_obj <- roc(trainData$label, as.numeric(dtree_reg_pred))
+Linear_SVM_roc_obj <- roc(trainData$label, as.numeric(Linear_SVM_pred))
+Radial_SVM_roc_obj_roc_obj <- roc(trainData$label, as.numeric(Radial_SVM_pred))
+XGboost_roc_obj <- roc(trainData$label, as.numeric(XGboost_DT_pred))
+Nnet_roc_obj <- roc(trainData$label, as.numeric(Nnet_reg_pred))
+Rf_roc_obj <- roc(trainData$label, as.numeric(rf_tree_pred))
+tree_roc_obj <- roc(trainData$label, as.numeric(tree_pred))
+Adaboost_roc_obj <- roc(trainData$label, as.numeric(Adaboost_DT_pred))
+
+plot(dtree_roc_obj, print.auc=TRUE,col="red",main="Decision Tree")
+plot(Linear_SVM_roc_obj, print.auc=TRUE,col="blue",main="Linear SVM")
+plot(Radial_SVM_roc_obj_roc_obj, print.auc=TRUE,col="green",main="Radial SVM")
+plot(XGboost_roc_obj, print.auc=TRUE,col="grey",main="XG Boost Decision Tree")
+plot(Adaboost_roc_obj, print.auc=TRUE,col="darkgoldenrod1",main="Ada Boost Decision Tree")
+plot(Nnet_roc_obj, print.auc=TRUE,col="orange",main="Neural Network")
+plot(Rf_roc_obj, print.auc=TRUE,col="cornflowerblue",main="Random Forest")
+plot(tree_roc_obj, print.auc=TRUE,col="chocolate4",main="Decision Tree")
+
+
+```
+
+## Boxplot
+Each colour represents a fold. The line gives us the information of what accuracy the model is giving us when the same fold is fed into it.
+
+Extreme Boosting(xgbTree) is giving us significantly better accuracy for every fold.
+
+```{r Accuracy Plots, warning = FALSE}
+movie_comp <- resamples(list(svmLinear = Linear_SVM, 
+                                svmRadial = Radial_SVM, 
+                                BoostedDecisionTree = dtree_reg,
+                                XGBoostedTree = XGboost_DT,
+                                NeralNetwork = Nnet_reg,
+                                DecisionTree = tree,
+                                AdaboostTree = Adaboost_DT,
+                                RandomForest =  rf_tree))
+
+bwplot(movie_comp, metric = "Accuracy",main='Models vs Accuracy Boxplot')
+```
+
+## Parallel Plot
+Time Comparison Each colour represents a model. The best model is going to be a balance between accuracy and time taken ie. the one that takes less time and also gives us good accuracy.
+
+Extreme Boosting(xgbTree) is giving us significantly better accuracy and take few seconds to give us the result
+```{r Box Plot Plots, warning = FALSE}
+parallelplot(movie_comp,
+             main='Movie Reviews: Parallel Plot for all models(k=5 folds)')
+```
+
+## Model Time Plot
+
+```{r XY Plots, warning = FALSE}
+xyplot(movie_comp, what = "mTime",units = "min",
+       main='Movie Reviews : ModelTime Plot for all models(k=5 folds)',
+       auto.key=list(space='left', row=1, 
+                     title='Model', cex.title=1.5,
+                     lines=TRUE, points=FALSE))
+```
+
+## Learning Curve for our best model
+This is the learning curve for Training, Cross Validation Accuracy vs no of Training Examples
+By looking at the plot, we can say that our model is to simple and we need more features for it perform better because the training accuracy is being pulled down and testing accuracy is not increasing. We need to perform some more analysis before running models
+
+```{r Trainingvssampling, warning = FALSE }
+trainData_curve <- as.data.frame(lapply(trainData, as.numeric))
+trainData_curve$label <- as.factor(trainData_curve$label)
+
+cl <- parallel::makeCluster(detectCores(logical=FALSE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+trnControl <- trainControl(method='cv',index=pet_CV_Folds, allowParallel = TRUE)
+besttune_model = expand.grid(.mtry=c(1,5,10,15))
+set.seed(13)
+learning_curve <- learning_curve_dat(
+  dat = trainData_curve,
+  outcome = "label",test_prop = 0,
+  verbose = TRUE, method = "rf",
+  metric = "metric",tuneGrid = besttune_model)
+```
+
+```{r Trainingvssampling Plots, warning = FALSE,message=FALSE}
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+Sampling_plot<- ggplot(learning_curve, aes(x = Training_Size, y =Accuracy, color = Data)) + 
+  geom_smooth(method = loess, span = .8) + 
+  theme(legend.position="top")+
+  labs(title = "Pet boostTree : Accuracy(Train & Test) vs m")
+Sampling_plot
+```
+
+# Data Preprocessing for Test Dataset
+Our Model is ready and now preparing test data so that we can predict sentiments for phrases in test dataset.
+```{r Test Corpus, warning = FALSE}
+test.corpus <- VCorpus(VectorSource(test$Phrase))
+test.corpus = tm_map(test.corpus, content_transformer(tolower))
+test.corpus = tm_map(test.corpus, removeNumbers)
+test.corpus = tm_map(test.corpus, removePunctuation)
+test.corpus = tm_map(test.corpus, removeWords, stopwords())
+test.corpus = tm_map(test.corpus, stripWhitespace)
+```
+
+```{r Test data prepfrocessing - Corpus, warning = FALSE}
+df_test <-  data.frame(text=unlist(sapply(test.corpus, `[`, "content")), stringsAsFactors=FALSE)
+
+ val=0
+  for (i in 1:nrow(df_test))
+  {
+    if (df_test$text[i]== "")
+    { 
+      val=c(val,gsub("",NA,df_test$text[i]))
+    }else{
+      val=c(val,lemmatize_strings(df_test$text[i]))
+    }
+  }
+val <- val[2:length(val)]
+df_test$text1 <- val
+df_test <- df_test[!duplicated(df_test), ]
+df_test <- na.omit(df_test)
+df_test <- df_test[!apply(is.na(df_test) | df_test$text1 == "", 1, all),]
+df_test$text <- df_test$text1
+df_test <- subset(df_test, select = -text1)
+```
+
+```{r Test model Corupus, warning = FALSE}
+##tidy_ngram_test <- df_test1 %>%
+##  unnest_tokens(bigram, text, token = "ngrams", n=2)
+train.corpus_test <- VCorpus(VectorSource(df_test$text[1:10000]))
+dtm_test = DocumentTermMatrix(train.corpus_test)
+tfidf_test <- weightTfIdf(dtm_test) 
+txt_mat_test<- as.textmatrix(as.matrix(tfidf_test))
+lsa_model_test <- lsa(txt_mat_test,dim=50)
+testData <- as.data.frame(as.matrix(lsa_model_test$tk))  
+```
+
+## Predicting Sentiment
+Below is the Test dataset for which prediction is made.
+```{r Prediction, warning = FALSE}
+prediction <-predict(rf_tree,testData)
+df_test1 <- as.data.frame(df_test[1:10000,])
+df_test1$Sentiment <- prediction
+head(df_test1,10)
+```
+
+# Final Summary
+
+## Best Model
+
+Random Forest is the best model even though the time consumed by it is little higher than others.
+
+* **How to improve the model Accuracy**
+  + Word2vec can be used to create word embeddings which might provide better results.
+  + Deep learning models like LSTM and GRU could be applied to provide better results.
+
+* **Time Spent**
+  + Learning NLP topics and data exploration, understanding n value for ngram took most of the time.
+  + Modelling and plotting took around 20% of the time.
+  + Understanding Rmd, Rhub platform, designing report took 15% of the time.
+  
+* **Challenge Faced**
+  + Running Tensorflow was problematic. Architecture error and resolving took a lot of time .
+  + **Memmory Issue:** 
+    - Converting large text into matrix was taking more memory than available memory. I had to take subset of train and test dataset.
+  + Since most of the decisions made in life are impacted by emotions, understanding emotions is challenging in NLP.
+
